@@ -5,12 +5,12 @@ services:
     plan: free
     ipAllowList: []
 
-  # 🌐 Main Web Service (Django)
+  # 🌐 All-in-One Web Service (Django + Celery)
   - type: web
     name: nexly-web
     env: python
-    buildCommand: "./build.sh"
-    startCommand: "gunicorn myproject.wsgi:application"
+    buildCommand: "chmod +x start.sh && ./build.sh"
+    startCommand: "./start.sh"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -27,27 +27,6 @@ services:
         value: "False"
       - key: PYTHON_VERSION
         value: 3.10.12
-
-  # ⚙️ Background Worker (Celery)
-  - type: worker
-    name: nexly-worker
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "celery -A myproject worker -l info"
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: nexly-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: nexly-cache
-          property: connectionString
-      - key: SECRET_KEY
-        sync: false # This tells Render to use the same generated value across services if they share the same key name in the same blueprint
-      - key: DEBUG
-        value: "False"
 
 # 🗄️ Managed PostgreSQL Database
 databases:
