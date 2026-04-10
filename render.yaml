@@ -1,9 +1,9 @@
 services:
-  # 🚀 Managed Redis Cache (now type: keyvalue)
+  # 🚀 Managed Redis Cache
   - type: keyvalue
     name: nexly-cache
     plan: free
-    ipAllowList: [] # Only allow internal connections
+    ipAllowList: []
 
   # 🌐 Main Web Service (Django)
   - type: web
@@ -45,10 +45,9 @@ services:
           name: nexly-cache
           property: connectionString
       - key: SECRET_KEY
-        fromService:
-          type: web
-          name: nexly-web
-          property: SECRET_KEY
+        sync: false # This tells Render to use the same generated value across services if they share the same key name in the same blueprint
+      - key: DEBUG
+        value: "False"
 
 # 🗄️ Managed PostgreSQL Database
 databases:
