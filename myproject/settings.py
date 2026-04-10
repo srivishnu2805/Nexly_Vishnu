@@ -219,8 +219,15 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# ⚙️ CELERY (Async Tasks)
-CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+# Celery settings (Optional - will be disabled if REDIS_URL is not set)
+REDIS_URL = os.environ.get('REDIS_URL', '')
+if REDIS_URL:
+    CELERY_BROKER_URL = REDIS_URL
+    CELERY_RESULT_BACKEND = REDIS_URL
+else:
+    # Use standard Django tasks instead of Celery if Redis is missing
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_BROKER_URL = None
+    CELERY_RESULT_BACKEND = None
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'

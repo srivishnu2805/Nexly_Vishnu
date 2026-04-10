@@ -1,6 +1,0 @@
-applications:
-- name: onlinecourse
-  routes:
-    - route: onlinecourse-app.test-domain.com
-  memory: 256M
-  buildpack: python_buildpack
