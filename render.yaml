@@ -1,4 +1,10 @@
 services:
+  # 🚀 Managed Redis Cache (now type: keyvalue)
+  - type: keyvalue
+    name: nexly-cache
+    plan: free
+    ipAllowList: [] # Only allow internal connections
+
   # 🌐 Main Web Service (Django)
   - type: web
     name: nexly-web
@@ -12,7 +18,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: nexly-cache
           property: connectionString
       - key: SECRET_KEY
@@ -35,7 +41,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: nexly-cache
           property: connectionString
       - key: SECRET_KEY
@@ -48,10 +54,3 @@ services:
 databases:
   - name: nexly-db
     plan: free
-
-# 🚀 Managed Redis Cache
-files: []
-redis:
-  - name: nexly-cache
-    plan: free
-    ipAllowList: [] # Only allow internal connections
