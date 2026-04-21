@@ -1,10 +1,12 @@
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.contrib.auth.models import User
 from .models import Course, Lesson, Question, Choice, Enrollment, Submission, Learner, UserLessonProgress, ExamViolation
-from datetime import date
-import uuid
+from .views import calculate_score
+from datetime import date, datetime
+from unittest.mock import patch
 
+@override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
 class NexlyModelTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', password='password')
@@ -38,6 +40,7 @@ class NexlyModelTests(TestCase):
         self.assertEqual(learner.streak_count, 0)
         self.assertIsNone(learner.last_activity_date)
 
+@override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
 class NexlyViewIntegrationTests(TestCase):
     def setUp(self):
         self.client = Client()
@@ -121,6 +124,7 @@ class NexlyViewIntegrationTests(TestCase):
         self.assertContains(response, "Certificate Verified")
         self.assertContains(response, str(submission.verification_uuid))
 
+@override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
 class NexlySystemTests(TestCase):
     """System-level flow testing."""
     def test_complete_user_journey(self):
@@ -158,3 +162,123 @@ class NexlySystemTests(TestCase):
         response = c.get(verify_url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "New User")
+
+
+@override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
+class NexlyCoverageExpansionTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(username='learner', password='pass123', first_name='Learn', last_name='Er')
+        self.staff = User.objects.create_user(username='staffer', password='pass123', is_staff=True)
+        self.course = Course.objects.create(
+            name="Coverage Course",
+            description="Coverage test course",
+            passing_score=70,
+            exam_time_limit=1,
+        )
+        self.lesson = Lesson.objects.create(title="L1", content="Lesson content", course=self.course, order=1)
+        self.question = Question.objects.create(course=self.course, question_text="Pick correct", grade=100)
+        self.correct_choice = Choice.objects.create(question=self.question, choice_text="Correct", is_correct=True)
+        self.wrong_choice = Choice.objects.create(question=self.question, choice_text="Wrong", is_correct=False)
+        self.enrollment = Enrollment.objects.create(user=self.user, course=self.course)
+
+    def test_calculate_score_handles_mixed_answers(self):
+        submission = Submission.objects.create(enrollment=self.enrollment)
+        submission.choices.add(self.correct_choice)
+        self.assertEqual(calculate_score(self.course, submission), 100)
+
+        submission2 = Submission.objects.create(enrollment=self.enrollment)
+        submission2.choices.add(self.wrong_choice)
+        self.assertEqual(calculate_score(self.course, submission2), 0)
+
+    def test_take_exam_redirects_when_not_enrolled(self):
+        outsider = User.objects.create_user(username='outsider', password='pass123')
+        self.client.login(username='outsider', password='pass123')
+        response = self.client.get(reverse('onlinecourse:take_exam', args=[self.course.id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, reverse('onlinecourse:course_details', args=[self.course.id]))
+
+    @patch('onlinecourse.tasks.generate_and_email_certificate.delay')
+    def test_submit_rejects_time_limit_violation(self, mock_delay):
+        self.client.login(username='learner', password='pass123')
+        session = self.client.session
+        session[f'exam_start_{self.course.id}'] = 0
+        session.save()
+        response = self.client.post(
+            reverse('onlinecourse:submit', args=[self.course.id]),
+            {f'choice_{self.correct_choice.id}': self.correct_choice.id, 'time_taken': 20},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, reverse('onlinecourse:course_details', args=[self.course.id]))
+        self.assertEqual(Submission.objects.filter(enrollment=self.enrollment).count(), 0)
+        self.assertEqual(ExamViolation.objects.filter(user=self.user, course=self.course).count(), 1)
+        mock_delay.assert_not_called()
+
+    def test_submit_rejects_missing_exam_session_token(self):
+        self.client.login(username='learner', password='pass123')
+        response = self.client.post(
+            reverse('onlinecourse:submit', args=[self.course.id]),
+            {f'choice_{self.correct_choice.id}': self.correct_choice.id, 'time_taken': 20},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, reverse('onlinecourse:course_details', args=[self.course.id]))
+        self.assertEqual(Submission.objects.filter(enrollment=self.enrollment).count(), 0)
+
+    @patch('onlinecourse.tasks.generate_and_email_certificate.delay')
+    def test_submit_creates_attempt_and_queues_task_on_pass(self, mock_delay):
+        self.client.login(username='learner', password='pass123')
+        session = self.client.session
+        session[f'exam_start_{self.course.id}'] = datetime.now().timestamp()
+        session.save()
+        response = self.client.post(
+            reverse('onlinecourse:submit', args=[self.course.id]),
+            {f'choice_{self.correct_choice.id}': self.correct_choice.id, 'time_taken': 25},
+        )
+        self.assertEqual(response.status_code, 302)
+        submission = Submission.objects.get(enrollment=self.enrollment)
+        self.assertEqual(submission.attempt_number, 1)
+        self.assertTrue(submission.passed)
+        mock_delay.assert_called_once_with(submission.id)
+
+    def test_rate_course_updates_enrollment(self):
+        self.client.login(username='learner', password='pass123')
+        response = self.client.post(reverse('onlinecourse:rate_course', args=[self.course.id]), {'rating': '4.5'})
+        self.assertEqual(response.status_code, 302)
+        self.enrollment.refresh_from_db()
+        self.assertTrue(self.enrollment.is_rated)
+        self.assertEqual(self.enrollment.rating, 4.5)
+
+    def test_log_violation_requires_authentication(self):
+        response = self.client.post(reverse('onlinecourse:log_violation', args=[self.course.id]))
+        self.assertEqual(response.status_code, 401)
+
+    def test_log_violation_records_violation_for_authenticated_user(self):
+        self.client.login(username='learner', password='pass123')
+        response = self.client.post(reverse('onlinecourse:log_violation', args=[self.course.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ExamViolation.objects.filter(user=self.user, course=self.course).count(), 1)
+
+    def test_admin_analytics_json_for_staff(self):
+        Submission.objects.create(enrollment=self.enrollment, score=80, passed=True)
+        self.client.login(username='staffer', password='pass123')
+        response = self.client.get(reverse('onlinecourse:admin_analytics') + '?format=json')
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload['analytics']), 1)
+        self.assertEqual(payload['analytics'][0]['pass_count'], 1)
+
+    def test_course_list_api_returns_courses(self):
+        response = self.client.get(reverse('onlinecourse:api_course_list'))
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['name'], self.course.name)
+
+    def test_public_showcase_api_returns_learner_profile(self):
+        Learner.objects.create(user=self.user)
+        Submission.objects.create(enrollment=self.enrollment, score=90, passed=True, time_taken_seconds=30)
+        response = self.client.get(reverse('onlinecourse:api_public_showcase', args=[self.user.username]))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['learner']['username'], self.user.username)
+        self.assertEqual(len(payload['achievements']), 1)
