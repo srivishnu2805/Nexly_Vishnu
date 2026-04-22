@@ -7,8 +7,6 @@
 
 Nexly is a technical learning platform that uses data-driven performance metrics to verify and certify technical skills. It transforms standard course assessments into deep-skill profiles for career growth.
 
-![Skill DNA Radar](static/screenshots/skill-dna.png)
-
 ---
 
 ## 🏁 Quick Start
